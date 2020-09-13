@@ -2017,7 +2017,7 @@ class ProcBox(Box):
 		else:
 			width_p, height_p = cls.width_p, cls.height_p
 		cls.width = round(Term.width * width_p / 100)
-		cls.height = round(Term.height * height_p / 100)
+		cls.height = round(Term.height * height_p / 100) + 1
 		if cls.height + Box._b_cpu_h > Term.height: cls.height = Term.height - Box._b_cpu_h
 		cls.x = Term.width - cls.width + 1
 		cls.y = Term.height - cls.height + 1
