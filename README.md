@@ -98,6 +98,14 @@ Also needs a UTF8 locale and a font that covers:
 
 #### Notice
 
+If you are having problems with the characters in the graphs not looking like they do in the screenshots,
+it's likely a problem with your systems configured fallback font not having support for braille characters.
+
+See comments by @sgleizes [link](https://github.com/aristocratos/bpytop/issues/100#issuecomment-684036827) and @XenHat [link](https://github.com/aristocratos/bpytop/issues/100#issuecomment-691585587) in issue #100 for possible solutions.
+
+
+#### Notice
+
 Dropbear seems to not be able to set correct locale. So if accessing bpytop over ssh, OpenSSH is recommended.
 
 ## Dependencies
@@ -108,7 +116,7 @@ Dropbear seems to not be able to set correct locale. So if accessing bpytop over
 
 ## Optionals for additional stats
 
-(Optional OSX) **[osx-cpu-temp](https://github.com/lavoiesl/osx-cpu-temp)** Needed to show CPU temperatures.
+(Optional OSX) **[coretemp](https://github.com/hacker1024/coretemp)** (recommended), or **[osx-cpu-temp](https://github.com/lavoiesl/osx-cpu-temp)** (less accurate) needed to show CPU temperatures.
 
 ## Screenshots
 
@@ -173,6 +181,13 @@ Available from [adrien-overlay](https://github.com/aaaaadrien/adrien-overlay)
 sudo emerge -av sys-process/bpytop
 ```
 
+### MX Linux
+
+Available in the MX Test Repo as `bpytop`
+Please use MX Package Installer MX Test Repo tab to install.
+
+http://mxrepo.com/mx/testrepo/pool/test/b/bpytop/
+
 ### Snap package
 
 by @kz6fittycent
@@ -228,7 +243,11 @@ brew install python3 git
 python3 -m pip install psutil
 ```
 
->Install optional dependency osx-cpu-temp
+>Install optional dependency coretemp (recommended), or osx-cpu-temp (less accurate)
+
+``` bash
+brew install hacker1024/hacker1024/coretemp
+```
 
 ``` bash
 brew install osx-cpu-temp

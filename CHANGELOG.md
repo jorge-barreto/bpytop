@@ -1,5 +1,30 @@
 # Changelog
 
+## v1.0.35
+
+* Fixed: Decimal placement in floating_humanizer() function
+
+## v1.0.34
+
+* Changed: Improvement on cpu name detection
+* Added: Option to choose cpu temperature sensor
+* Fixed: Battery meter adaptation
+
+## v1.0.33
+
+* Changed: Improvement on osx cpu temperature collection with coretemp
+* Fixed: Battery stats crash and better battery status detection
+* README: coretemp install instructions by @hacker1024
+* README: Added notice about font problems and possible solutions
+
+## v1.0.32
+
+* Added: Symbol for battery inactive
+* Fixed: Cpu model name exception for certain xeon cpus
+* Fixed: Exception when sending signal using uppercase T, K, I
+* Fixed: Battery meter placement calculation correction
+* Added: Support for OSX cpu core temperatures via coretemp program
+
 ## v1.0.31
 
 * Fixed: Battery meter redraw after terminal resize

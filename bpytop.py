@@ -56,7 +56,7 @@ if errors:
 		print("\nInstall required modules!\n")
 	raise SystemExit(1)
 
-VERSION: str = "1.0.31"
+VERSION: str = "1.0.35"
 
 #? Argument parser ------------------------------------------------------------------------------->
 args = argparse.ArgumentParser()
@@ -140,6 +140,9 @@ proc_mem_bytes=$proc_mem_bytes
 
 #* Check cpu temperature, needs "osx-cpu-temp" on MacOS X.
 check_temp=$check_temp
+
+#* Which sensor to use for cpu temperature, use options menu to select from list of available sensors.
+cpu_sensor=$cpu_sensor
 
 #* Draw a clock at top of screen, formatting according to strftime, empty string to disable.
 draw_clock="$draw_clock"
@@ -359,7 +362,7 @@ class Config:
 	keys: List[str] = ["color_theme", "update_ms", "proc_sorting", "proc_reversed", "proc_tree", "check_temp", "draw_clock", "background_update", "custom_cpu_name",
 						"proc_colors", "proc_gradient", "proc_per_core", "proc_mem_bytes", "disks_filter", "update_check", "log_level", "mem_graphs", "show_swap",
 						"swap_disk", "show_disks", "net_download", "net_upload", "net_auto", "net_color_fixed", "show_init", "view_mode", "theme_background",
-						"net_sync", "show_battery", "tree_depth"]
+						"net_sync", "show_battery", "tree_depth", "cpu_sensor"]
 	conf_dict: Dict[str, Union[str, int, bool]] = {}
 	color_theme: str = "Default"
 	theme_background: bool = True
@@ -373,6 +376,7 @@ class Config:
 	proc_per_core: bool = False
 	proc_mem_bytes: bool = True
 	check_temp: bool = True
+	cpu_sensor: str = "Auto"
 	draw_clock: str = "%X"
 	background_update: bool = True
 	custom_cpu_name: str = ""
@@ -399,6 +403,19 @@ class Config:
 	log_levels: List[str] = ["ERROR", "WARNING", "INFO", "DEBUG"]
 
 	view_modes: List[str] = ["full", "proc", "stat"]
+
+	cpu_sensors: List[str] = [ "Auto" ]
+
+	if hasattr(psutil, "sensors_temperatures"):
+		try:
+			_temps = psutil.sensors_temperatures()
+			if _temps:
+				for _name, _entries in _temps.items():
+					for _num, _entry in enumerate(_entries, 1):
+						if hasattr(_entry, "current"):
+							cpu_sensors.append(f'{_name}:{_num if _entry.label == "" else _entry.label}')
+		except:
+			pass
 
 	changed: bool = False
 	recreate: bool = False
@@ -480,6 +497,9 @@ class Config:
 		for net_name in ["net_download", "net_upload"]:
 			if net_name in new_config and not new_config[net_name][0].isdigit(): # type: ignore
 				new_config[net_name] = "_error_"
+		if "cpu_sensor" in new_config and not new_config["cpu_sensor"] in self.cpu_sensors:
+			new_config["cpu_sensor"] = "_error_"
+			self.warnings.append(f'Config key "cpu_sensor" does not contain an available sensor!')
 		return new_config
 
 	def save_config(self):
@@ -1555,7 +1575,9 @@ class CpuBox(Box, SubBox):
 	buffer: str = "cpu"
 	battery_percent: int = 1000
 	battery_secs: int = 0
+	battery_status: str = "Unknown"
 	old_battery_pos = 0
+	old_battery_len = 0
 	clock_block: bool = True
 	Box.buffers.append(buffer)
 
@@ -1599,6 +1621,44 @@ class CpuBox(Box, SubBox):
 		f'{create_box(x=cls.box_x, y=cls.box_y, width=cls.box_width, height=cls.box_height, line_color=THEME.div_line, fill=False, title=CPU_NAME[:cls.box_width - 14] if not CONFIG.custom_cpu_name else CONFIG.custom_cpu_name[:cls.box_width - 14])}')
 
 	@classmethod
+	def battery_activity(cls) -> bool:
+		if not hasattr(psutil, "sensors_battery") or psutil.sensors_battery() == None:
+			return False
+
+		return_true: bool = False
+		percent: int = ceil(getattr(psutil.sensors_battery(), "percent", 0))
+		if percent != cls.battery_percent:
+			cls.battery_percent = percent
+			return_true = True
+
+		seconds: int = getattr(psutil.sensors_battery(), "secsleft", 0)
+		if seconds != cls.battery_secs:
+			cls.battery_secs = seconds
+			return_true = True
+
+		status: str = "not_set"
+		if os.path.isfile("/sys/class/power_supply/BAT0/status"):
+			try:
+				with open("/sys/class/power_supply/BAT0/status", "r") as file:
+					status = file.read().strip()
+			except:
+				pass
+		if status == "not_set" and getattr(psutil.sensors_battery(), "power_plugged", None) == True:
+			status = "Charging" if cls.battery_percent < 100 else "Full"
+		elif status == "not_set" and getattr(psutil.sensors_battery(), "power_plugged", None) == False:
+			status = "Discharging"
+		elif status == "not_set":
+			status = "Unknown"
+		if status != cls.battery_status:
+			cls.battery_status = status
+			return_true = True
+
+		if return_true or cls.resized or cls.redraw:
+			return True
+		else:
+			return False
+
+	@classmethod
 	def _draw_fg(cls):
 		cpu = CpuCollector
 		if cpu.redraw: cls.redraw = True
@@ -1626,24 +1686,29 @@ class CpuBox(Box, SubBox):
 						Graphs.temps[n] = Graph(5, 1, None, cpu.cpu_temp[n], max_value=cpu.cpu_temp_crit, offset=-23)
 			Draw.buffer("cpu_misc", out_misc, only_save=True)
 
-		if CONFIG.show_battery and hasattr(psutil, "sensors_battery") and psutil.sensors_battery() and (ceil(psutil.sensors_battery().percent) != cls.battery_percent or psutil.sensors_battery().secsleft != cls.battery_secs or cls.resized or cls.redraw):
-			cls.battery_percent = ceil(psutil.sensors_battery().percent)
-			if psutil.sensors_battery().secsleft > 0:
-				cls.battery_secs = psutil.sensors_battery().secsleft
-				battery_time = f' {THEME.title}{cls.battery_secs // 3600:02}:{(cls.battery_secs % 3600) // 60:02}'
+		if CONFIG.show_battery and cls.battery_activity():
+			if cls.battery_secs > 0:
+				battery_time: str = f' {cls.battery_secs // 3600:02}:{(cls.battery_secs % 3600) // 60:02}'
 			else:
-				cls.battery_secs = 0
 				battery_time = ""
 			if not hasattr(Meters, "battery") or cls.resized:
 				Meters.battery = Meter(cls.battery_percent, 10, "cpu", invert=True)
-			battery_symbol: str = "▼" if not psutil.sensors_battery().power_plugged else "▲"
-			battery_pos = cls.width - len(f'{CONFIG.update_ms}') - 17 - (11 if cls.width >= 100 else 0) - len(battery_time) - len(f'{cls.battery_percent}')
+			if cls.battery_status == "Charging":
+				battery_symbol: str = "▲"
+			elif cls.battery_status == "Discharging":
+				battery_symbol = "▼"
+			elif cls.battery_status in ["Full", "Not charging"]:
+				battery_symbol = "■"
+			else:
+				battery_symbol = "○"
+			battery_len: int = len(f'{CONFIG.update_ms}') + (11 if cls.width >= 100 else 0) + len(battery_time) + len(f'{cls.battery_percent}')
+			battery_pos = cls.width - battery_len - 17
 			if battery_pos != cls.old_battery_pos and cls.old_battery_pos > 0 and not cls.resized:
-				out += f'{Mv.to(y-1, cls.old_battery_pos)}{THEME.cpu_box(Symbol.h_line*(15 if cls.width >= 100 else 5))}'
-			cls.old_battery_pos = battery_pos
+				out += f'{Mv.to(y-1, cls.old_battery_pos)}{THEME.cpu_box(Symbol.h_line*cls.old_battery_len)}'
+			cls.old_battery_pos, cls.old_battery_len = battery_pos, battery_len
 			out += (f'{Mv.to(y-1, battery_pos)}{THEME.cpu_box(Symbol.title_left)}{Fx.b}{THEME.title}BAT{battery_symbol} {cls.battery_percent}%'+
 				("" if cls.width < 100 else f' {Fx.ub}{Meters.battery(cls.battery_percent)}{Fx.b}') +
-				f'{battery_time}{Fx.ub}{THEME.cpu_box(Symbol.title_right)}')
+				f'{THEME.title}{battery_time}{Fx.ub}{THEME.cpu_box(Symbol.title_right)}')
 
 		cx = cy = cc = 0
 		ccw = (bw + 1) // cls.box_columns
@@ -2661,7 +2726,9 @@ class CpuCollector(Collector):
 		cls.sensor_method = ""
 		if SYSTEM == "MacOS":
 			try:
-				if which("osx-cpu-temp") and subprocess.check_output("osx-cpu-temp", text=True).rstrip().endswith("°C"):
+				if which("coretemp") and subprocess.check_output(["coretemp", "-p"], text=True).strip().replace("-", "").isdigit():
+					cls.sensor_method = "coretemp"
+				elif which("osx-cpu-temp") and subprocess.check_output("osx-cpu-temp", text=True).rstrip().endswith("°C"):
 					cls.sensor_method = "osx-cpu-temp"
 			except: pass
 		elif hasattr(psutil, "sensors_temperatures"):
@@ -2710,14 +2777,26 @@ class CpuCollector(Collector):
 
 	@classmethod
 	def _collect_temps(cls):
-		temp: int
+		temp: int = 1000
 		cores: List[int] = []
 		cpu_type: str = ""
+		s_name: str = "_-_"
+		s_label: str = "_-_"
 		if cls.sensor_method == "psutil":
 			try:
 				for name, entries in psutil.sensors_temperatures().items():
-					for entry in entries:
-						if entry.label.startswith(("Package", "Tdie")) and hasattr(entry, "current") and round(entry.current) > 0:
+					for num, entry in enumerate(entries, 1):
+						if CONFIG.cpu_sensor != "Auto":
+							s_name, s_label = CONFIG.cpu_sensor.split(":", 1)
+						if temp == 1000 and name == s_name and (entry.label == s_label or str(num) == s_label) and round(entry.current) > 0:
+							cpu_type = "other"
+							if not cls.cpu_temp_high:
+								if hasattr(entry, "high") and entry.high: cls.cpu_temp_high = round(entry.high)
+								else: cls.cpu_temp_high = 80
+								if hasattr(entry, "critical") and entry.critical: cls.cpu_temp_crit = round(entry.critical)
+								else: cls.cpu_temp_crit = 95
+							temp = round(entry.current)
+						elif temp == 1000 and entry.label.startswith(("Package", "Tdie")) and hasattr(entry, "current") and round(entry.current) > 0:
 							cpu_type = "intel" if entry.label.startswith("Package") else "ryzen"
 							if not cls.cpu_temp_high:
 								if hasattr(entry, "high") and entry.high: cls.cpu_temp_high = round(entry.high)
@@ -2774,7 +2853,28 @@ class CpuCollector(Collector):
 
 		else:
 			try:
-				if cls.sensor_method == "osx-cpu-temp":
+				if cls.sensor_method == "coretemp":
+					temp = max(0, int(subprocess.check_output(["coretemp", "-p"], text=True).strip()))
+					cores = [max(0, int(x)) for x in subprocess.check_output("coretemp", text=True).split()]
+					if len(cores) < THREADS:
+						cls.cpu_temp[0].append(temp)
+						for n, t in enumerate(cores, start=1):
+							try:
+								cls.cpu_temp[n].append(t)
+								cls.cpu_temp[THREADS // 2 + n].append(t)
+							except IndexError:
+								break
+					else:
+						cores.insert(0, temp)
+						for n, t in enumerate(cores):
+							try:
+								cls.cpu_temp[n].append(t)
+							except IndexError:
+								break
+					if not cls.cpu_temp_high:
+						cls.cpu_temp_high = 85
+						cls.cpu_temp_crit = 100
+				elif cls.sensor_method == "osx-cpu-temp":
 					temp = max(0, round(float(subprocess.check_output("osx-cpu-temp", text=True).strip()[:-2])))
 					if not cls.cpu_temp_high:
 						cls.cpu_temp_high = 85
@@ -2787,18 +2887,15 @@ class CpuCollector(Collector):
 			except Exception as e:
 					errlog.exception(f'{e}')
 					cls.got_sensors = False
-					#CONFIG.check_temp = False
 					CpuBox._calc_size()
 			else:
-				for n in range(THREADS + 1):
-					cls.cpu_temp[n].append(temp)
+				if not cores:
+					for n in range(THREADS + 1):
+						cls.cpu_temp[n].append(temp)
 
 		if len(cls.cpu_temp[0]) > 5:
 			for n in range(len(cls.cpu_temp)):
 				del cls.cpu_temp[n][0]
-
-
-
 
 	@classmethod
 	def _draw(cls):
@@ -4001,6 +4098,12 @@ class Menu:
 				'Enable cpu temperature reporting.',
 				'',
 				'True or False.'],
+			"cpu_sensor" : [
+				'Cpu temperature sensor',
+				'',
+				'Select the sensor that corresponds to',
+				'your cpu temperature.',
+				'Set to "Auto" for auto detection.'],
 			"draw_clock" : [
 				'Draw a clock at top of screen.',
 				'',
@@ -4123,6 +4226,7 @@ class Menu:
 		sorting_i: int = CONFIG.sorting_options.index(CONFIG.proc_sorting)
 		loglevel_i: int = CONFIG.log_levels.index(CONFIG.log_level)
 		view_mode_i: int = CONFIG.view_modes.index(CONFIG.view_mode)
+		cpu_sensor_i: int = CONFIG.cpu_sensors.index(CONFIG.cpu_sensor)
 		color_i: int
 		while not cls.close:
 			key = ""
@@ -4169,11 +4273,13 @@ class Menu:
 						counter = f' {loglevel_i + 1}/{len(CONFIG.log_levels)}'
 					elif opt == "view_mode":
 						counter = f' {view_mode_i + 1}/{len(CONFIG.view_modes)}'
+					elif opt == "cpu_sensor":
+						counter = f' {cpu_sensor_i + 1}/{len(CONFIG.cpu_sensors)}'
 					else:
 						counter = ""
 					out += f'{Mv.to(y+1+cy, x+1)}{t_color}{Fx.b}{opt.replace("_", " ").capitalize() + counter:^24.24}{Fx.ub}{Mv.to(y+2+cy, x+1)}{v_color}'
 					if opt == selected:
-						if isinstance(value, bool) or opt in ["color_theme", "proc_sorting", "log_level", "view_mode"]:
+						if isinstance(value, bool) or opt in ["color_theme", "proc_sorting", "log_level", "view_mode", "cpu_sensor"]:
 							out += f'{t_color} {Symbol.left}{v_color}{d_quote + str(value) + d_quote:^20.20}{t_color}{Symbol.right} '
 						elif inputting:
 							out += f'{str(input_val)[-17:] + Fx.bl + "█" + Fx.ubl + "" + Symbol.enter:^33.33}'
@@ -4323,6 +4429,14 @@ class Menu:
 					CONFIG.log_level = CONFIG.log_levels[loglevel_i]
 					errlog.setLevel(getattr(logging, CONFIG.log_level))
 					errlog.info(f'Loglevel set to {CONFIG.log_level}')
+				elif key in ["left", "right"] and selected == "cpu_sensor":
+					if key == "left":
+						cpu_sensor_i -= 1
+						if cpu_sensor_i < 0: cpu_sensor_i = len(CONFIG.cpu_sensors) - 1
+					elif key == "right":
+						cpu_sensor_i += 1
+						if cpu_sensor_i > len(CONFIG.cpu_sensors) - 1: cpu_sensor_i = 0
+					CONFIG.cpu_sensor = CONFIG.cpu_sensors[cpu_sensor_i]
 				elif key in ["left", "right"] and selected == "view_mode":
 					if key == "left":
 						view_mode_i -= 1
@@ -4523,18 +4637,23 @@ def get_cpu_name() -> str:
 	else:
 		name = cmd_out
 	nlist = name.split(" ")
-	if "Xeon" in name and "CPU" in name:
-		name = nlist[nlist.index("CPU")+1]
-	elif "Ryzen" in name:
-		name = " ".join(nlist[nlist.index("Ryzen"):nlist.index("Ryzen")+3])
-	elif "Duo" in name and "@" in name:
-		name = " ".join(nlist[:nlist.index("@")])
-	elif "CPU" in name and not nlist[0] == "CPU":
-		name = nlist[nlist.index("CPU")-1]
+	try:
+		if "Xeon" in name and "CPU" in name:
+			name = nlist[nlist.index("CPU")+(-1 if name.endswith("CPU") else 1)]
+		elif "Ryzen" in name:
+			name = " ".join(nlist[nlist.index("Ryzen"):nlist.index("Ryzen")+3])
+		elif "Duo" in name and "@" in name:
+			name = " ".join(nlist[:nlist.index("@")])
+		elif "CPU" in name and not nlist[0] == "CPU" and not nlist[nlist.index("CPU")-1].isdigit():
+			name = nlist[nlist.index("CPU")-1]
+	except:
+		pass
 
+	name = name.replace("Processor", "").replace("CPU", "").replace("(R)", "").replace("(TM)", "").replace("Intel", "")
+	name = re.sub(r"\d?\.?\d+[mMgG][hH][zZ]", "", name)
 	name = " ".join(name.split())
 
-	return name.replace("Processor ", "").replace("CPU ", "").replace("(R)", "").replace("(TM)", "").replace("Intel ", "")
+	return name
 
 def create_box(x: int = 0, y: int = 0, width: int = 0, height: int = 0, title: str = "", title2: str = "", line_color: Color = None, title_color: Color = None, fill: bool = True, box = None) -> str:
 	'''Create a box from a box object or by given arguments'''
@@ -4641,9 +4760,10 @@ def floating_humanizer(value: Union[float, int], bit: bool = False, per_second: 
 			break
 		selector += 1
 	else:
-		if len(f'{value}') < 5 and len(f'{value}') >= 2 and selector > 0:
-			decimals = 5 - len(f'{value}')
-			out = f'{value}'[:-2] + "." + f'{value}'[-decimals:]
+		if len(f'{value}') == 4 and selector > 0:
+			out = f'{value}'[:-2] + "." + f'{value}'[-2]
+		elif len(f'{value}') == 3 and selector > 0:
+			out = f'{value}'[:-2] + "." + f'{value}'[-2:]
 		elif len(f'{value}') >= 2:
 			out = f'{value}'[:-2]
 		else:
@@ -4800,9 +4920,9 @@ def process_keys():
 		elif key.lower() in ["t", "k", "i"] and (ProcBox.selected > 0 or ProcCollector.detailed):
 			pid: int = ProcBox.selected_pid if ProcBox.selected > 0 else ProcCollector.detailed_pid # type: ignore
 			if psutil.pid_exists(pid):
-				if key == "t": sig = signal.SIGTERM
-				elif key == "k": sig = signal.SIGKILL
-				elif key == "i": sig = signal.SIGINT
+				if key.lower() == "t": sig = signal.SIGTERM
+				elif key.lower() == "k": sig = signal.SIGKILL
+				elif key.lower() == "i": sig = signal.SIGINT
 				try:
 					os.kill(pid, sig)
 				except Exception as e:
