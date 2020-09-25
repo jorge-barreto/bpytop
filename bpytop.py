@@ -56,7 +56,7 @@ if errors:
 		print("\nInstall required modules!\n")
 	raise SystemExit(1)
 
-VERSION: str = "1.0.35"
+VERSION: str = "1.0.37"
 
 #? Argument parser ------------------------------------------------------------------------------->
 args = argparse.ArgumentParser()
@@ -2731,6 +2731,8 @@ class CpuCollector(Collector):
 				elif which("osx-cpu-temp") and subprocess.check_output("osx-cpu-temp", text=True).rstrip().endswith("°C"):
 					cls.sensor_method = "osx-cpu-temp"
 			except: pass
+		elif CONFIG.cpu_sensor != "Auto" and CONFIG.cpu_sensor in CONFIG.cpu_sensors:
+			cls.sensor_method = "psutil"
 		elif hasattr(psutil, "sensors_temperatures"):
 			try:
 				temps = psutil.sensors_temperatures()
@@ -4413,6 +4415,7 @@ class Menu:
 					elif key == "right":
 						color_i += 1
 						if color_i > len(Theme.themes) - 1: color_i = 0
+					Collector.collect_idle.wait()
 					CONFIG.color_theme = list(Theme.themes)[color_i]
 					THEME(CONFIG.color_theme)
 					Term.refresh(force=True)
@@ -4429,7 +4432,7 @@ class Menu:
 					CONFIG.log_level = CONFIG.log_levels[loglevel_i]
 					errlog.setLevel(getattr(logging, CONFIG.log_level))
 					errlog.info(f'Loglevel set to {CONFIG.log_level}')
-				elif key in ["left", "right"] and selected == "cpu_sensor":
+				elif key in ["left", "right"] and selected == "cpu_sensor" and len(CONFIG.cpu_sensors) > 1:
 					if key == "left":
 						cpu_sensor_i -= 1
 						if cpu_sensor_i < 0: cpu_sensor_i = len(CONFIG.cpu_sensors) - 1
@@ -4437,6 +4440,8 @@ class Menu:
 						cpu_sensor_i += 1
 						if cpu_sensor_i > len(CONFIG.cpu_sensors) - 1: cpu_sensor_i = 0
 					CONFIG.cpu_sensor = CONFIG.cpu_sensors[cpu_sensor_i]
+					if CONFIG.check_temp and CpuCollector.sensor_method != "psutil":
+						CpuCollector.get_sensors()
 				elif key in ["left", "right"] and selected == "view_mode":
 					if key == "left":
 						view_mode_i -= 1
@@ -4771,7 +4776,8 @@ def floating_humanizer(value: Union[float, int], bit: bool = False, per_second: 
 
 
 	if short:
-		out = out.split(".")[0]
+		if "." in out:
+			out = f'{round(float(out))}'
 		if len(out) > 3:
 			out = f'{int(out[0]) + 1}'
 			selector += 1
@@ -4900,6 +4906,7 @@ def process_keys():
 			CONFIG.mem_graphs = not CONFIG.mem_graphs
 			Collector.collect(MemCollector, interrupt=True, redraw=True)
 		elif key == "s":
+			Collector.collect_idle.wait()
 			CONFIG.swap_disk = not CONFIG.swap_disk
 			Collector.collect(MemCollector, interrupt=True, redraw=True)
 		elif key == "f":
